@@ -1,24 +1,70 @@
-# pip install streamlit web3
-
 import streamlit as st
-from web3 import Web3
-import config
-import os
-import base64
+import os, json, uuid, base64
+import pandas as pd
 
-# ---------------------- BACKGROUND FUNCTIONS ----------------------
-def set_bg(image_path):
-    if os.path.exists(image_path):
-        with open(image_path, "rb") as f:
-            data = base64.b64encode(f.read()).decode()
+# ---------------- STORAGE ----------------
+DATA_FILE = "trades.json"
+UPLOAD_DIR = "trade_uploads"
+LOGO_PATH = "assets/logo.png"
+BG_PATH = "assets/background.png"  # ✅ ADDED: Path to your background image
 
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+def load_trades():
+    if os.path.exists(DATA_FILE):
+        return json.load(open(DATA_FILE))
+    return {}
+
+def save_trades(data):
+    json.dump(data, open(DATA_FILE, "w"), indent=4)
+
+def save_image(file, trade_id, label):
+    if file is None:
+        return None
+    path = os.path.join(UPLOAD_DIR, f"{trade_id}_{label}_{uuid.uuid4().hex}.png")
+    with open(path, "wb") as f:
+        f.write(file.getbuffer())
+    return path
+
+# ---------------- CONFIG ----------------
+st.set_page_config("Falcon FX Journal", layout="wide")
+
+# ---------------- SIDEBAR ----------------
+if os.path.exists(LOGO_PATH):
+    st.sidebar.image(LOGO_PATH, use_container_width=True)
+else:
+    st.sidebar.title("Falcon FX Journal")
+
+st.sidebar.caption("Execute with precision.")
+
+# ---------------- SESSION ----------------
+if "last_trade_id" not in st.session_state:
+    trades = load_trades()
+    st.session_state["last_trade_id"] = int(max(trades.keys(), default=0)) if trades else 0
+
+# ---------------- NAV ----------------
+page = st.sidebar.radio("Navigate", [
+    "Dashboard",
+    "Log Trade",
+    "Trade History"
+])
+
+# ---------------- STYLE ----------------
+# ✅ ADDED: Function to load local image as base64 and set as background
+def set_background(image_file):
+    if os.path.exists(image_file):
+        with open(image_file, "rb") as f:
+            encoded_string = base64.b64encode(f.read()).decode()
+        
+        # Apply the background to the main Streamlit app container
         st.markdown(
             f"""
             <style>
             .stApp {{
-                background-image: url("data:image/png;base64,{data}");
+                background-image: url(data:image/png;base64,{encoded_string});
                 background-size: cover;
                 background-position: center;
+                background-repeat: no-repeat;
                 background-attachment: fixed;
             }}
             </style>
@@ -26,268 +72,164 @@ def set_bg(image_path):
             unsafe_allow_html=True
         )
 
-def clear_bg():
-    st.markdown(
-        """
-        <style>
-        .stApp {
-            background: none;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
+# Call the background function
+set_background(BG_PATH)
 
-# ---------------------- PAGE ----------------------
-st.set_page_config(page_title=config.APP_NAME, layout="wide")
+# Original glassmorphism style
+st.markdown("""
+<style>
+.glass {
+    background: rgba(255,255,255,0.65);
+    padding:20px;
+    border-radius:18px;
+    margin-bottom:15px;
+    backdrop-filter: blur(10px); /* ✅ ADDED: Blur effect to make the glass stand out against your new background */
+}
+</style>
+""", unsafe_allow_html=True)
 
-LOGO_PATH = "assets/logo.png"
-DASHBOARD_BG_PATH = "assets/dashboard.png"
+# ---------------- PAIRS ----------------
+PAIRS = [
+    "GBP/USD","EUR/USD","GBP/AUD","AUD/USD","NZD/USD",
+    "AUD/NZD","GBP/JPY","EUR/JPY","CAD/JPY",
+    "AUD/CAD","NZD/CAD","EUR/AUD","EUR/NZD",
+    "XAU/USD"
+]
 
-# ---------------------- HEADER ----------------------
-if os.path.exists(LOGO_PATH):
-    st.sidebar.image(LOGO_PATH, use_container_width=True)
-else:
-    st.sidebar.title(config.APP_NAME)
-
-st.caption(config.APP_TAGLINE)
-
-# ---------------------- WEB3 ----------------------
-w3 = Web3(Web3.HTTPProvider(config.RPC_URL))
-contract = w3.eth.contract(
-    address=w3.to_checksum_address(config.CONTRACT_ADDRESS),
-    abi=config.CONTRACT_ABI
-)
-
-# ---------------------- SESSION ----------------------
-if "last_trade_id" not in st.session_state:
-    st.session_state["last_trade_id"] = 1
-
-for key in ["weekly_watch", "daily_watch", "wildcards"]:
-    if key not in st.session_state:
-        st.session_state[key] = []
-
-# ---------------------- NAV ----------------------
-page = st.sidebar.radio("Navigate", [
-    "Dashboard",
-    "Watchlist",
-    "Log New Trade",
-    "Close Trade",
-    "View Trade"
-])
-
-# ---------------------- DASHBOARD ----------------------
+# ---------------- DASHBOARD ----------------
 if page == "Dashboard":
-    set_bg(DASHBOARD_BG_PATH)
+    trades = load_trades()
 
-    # CSS for Glass UI and Bubbles
-    st.markdown("""
-        <style>
-        .glass {
-            background: rgba(255, 255, 255, 0.65);
-            backdrop-filter: blur(12px);
-            border-radius: 18px;
-            padding: 22px;
-            border: 1px solid rgba(255, 255, 255, 0.35);
-            margin-bottom: 18px;
-            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+    total = len(trades)
+    wins = len([t for t in trades.values() if t["rr"] > 0])
+    losses = len([t for t in trades.values() if t["rr"] < 0])
+    breakeven = len([t for t in trades.values() if t["rr"] == 0])
+
+    win_rate = (wins / total * 100) if total > 0 else 0
+    avg_rr = (sum([t["rr"] for t in trades.values()]) / total) if total > 0 else 0
+
+    st.markdown('<div class="glass"><h2>🦅 Falcon Forex Journal</h2></div>', unsafe_allow_html=True)
+
+    c1,c2,c3,c4,c5 = st.columns(5)
+    c1.metric("Trades", total)
+    c2.metric("Wins", wins)
+    c3.metric("Losses", losses)
+    c4.metric("Win Rate", f"{win_rate:.1f}%")
+    c5.metric("Avg R:R", f"{avg_rr:.2f}")
+
+# ---------------- LOG TRADE ----------------
+elif page == "Log Trade":
+    st.header("Log Trade (Complete Entry + Result)")
+
+    pair = st.selectbox("Pair", PAIRS)
+    session = st.selectbox("Session", ["London","New York","Asia"])
+    risk = st.text_input("Risk %")
+    rr = st.text_input("Final R:R")
+    result = st.selectbox("Result", ["Win","Loss","Break Even"])
+
+    thought = st.text_area("Thought Process")
+
+    st.markdown("## Before vs After Analysis")
+
+    def timeframe_row(tf):
+        st.markdown(f"### {tf}")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("**Before**")
+            b_img = st.file_uploader(f"{tf} Before Image", key=f"b_{tf}")
+            if b_img:
+                st.image(b_img)
+            b_note = st.text_area(f"{tf} Before Note", key=f"bn_{tf}")
+
+        with col2:
+            st.markdown("**After**")
+            a_img = st.file_uploader(f"{tf} After Image", key=f"a_{tf}")
+            if a_img:
+                st.image(a_img)
+            a_note = st.text_area(f"{tf} After Note", key=f"an_{tf}")
+
+        return {
+            "before": {"img": b_img, "note": b_note},
+            "after": {"img": a_img, "note": a_note}
         }
-        .bubble {
-            background: rgba(255, 255, 255, 0.55);
-            border-radius: 12px;
-            padding: 10px 14px;
-            margin: 8px 0;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-            font-weight: 500;
-            color: #111;
+
+    tf_data = {}
+    for tf in ["Daily","4H","1H","15m","5m"]:
+        tf_data[tf] = timeframe_row(tf)
+
+    def validate(data):
+        for tf, d in data.items():
+            if d["after"]["img"] is None or not d["after"]["note"]:
+                return False
+        return True
+
+    if st.button("Save Trade"):
+        if not validate(tf_data):
+            st.error("⚠️ Complete ALL AFTER images and notes before saving.")
+            st.stop()
+
+        trades = load_trades()
+        tid = str(st.session_state["last_trade_id"] + 1)
+        st.session_state["last_trade_id"] += 1
+
+        structured = {}
+        for tf, d in tf_data.items():
+            structured[tf] = {
+                "before": {
+                    "image": save_image(d["before"]["img"], tid, f"{tf}_before"),
+                    "note": d["before"]["note"]
+                },
+                "after": {
+                    "image": save_image(d["after"]["img"], tid, f"{tf}_after"),
+                    "note": d["after"]["note"]
+                }
+            }
+
+        try:
+            rr_val = float(rr)
+        except:
+            rr_val = 0
+
+        trades[tid] = {
+            "pair": pair,
+            "session": session,
+            "risk": risk,
+            "rr": rr_val,
+            "result": result,
+            "thought": thought,
+            "timeframes": structured
         }
-        .metric-label { font-size: 13px; color: #555; }
-        .metric-value { font-size: 26px; font-weight: 800; color: #111; }
-        </style>
-    """, unsafe_allow_html=True)
 
-    # Welcome Banner
-    st.markdown(f"""
-    <div class="glass">
-        <div style="font-size: 28px; font-weight: 700;">🦅 Welcome To {config.APP_NAME}</div>
-        <div style="font-size: 14px; color: #444; margin-top: 6px;">
-            {config.APP_TAGLINE}
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+        save_trades(trades)
+        st.success(f"Trade #{tid} saved ✅")
 
-    # Data Handling
-    try:
-        total = contract.functions.tradeCount().call()
-        status_color = "#1b5e20"
-        status_text = "Connected"
-    except:
-        total = 0
-        status_color = "#b71c1c"
-        status_text = "Offline"
+# ---------------- TRADE HISTORY ----------------
+elif page == "Trade History":
+    st.header("Trade History")
 
-    # Metrics Row
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown(f'<div class="glass"><div class="metric-label">Total Trades (Blockchain)</div><div class="metric-value">{total}</div></div>', unsafe_allow_html=True)
-    with c2:
-        st.markdown(f'<div class="glass"><div class="metric-label">Last Trade ID</div><div class="metric-value">{st.session_state["last_trade_id"]}</div></div>', unsafe_allow_html=True)
-    with c3:
-        st.markdown(f'<div class="glass"><div class="metric-label">System Status</div><div class="metric-value" style="color:{status_color};">{status_text}</div></div>', unsafe_allow_html=True)
+    trades = load_trades()
+    tid = st.text_input("Enter Trade ID")
 
-    # Watchlist Bubbles
-    col_left, col_right = st.columns(2)
-    
-    with col_left:
-        st.markdown('<div class="glass"><h3>📅 Weekly Focus</h3>', unsafe_allow_html=True)
-        if st.session_state["weekly_watch"]:
-            for item in st.session_state["weekly_watch"]:
-                st.markdown(f'<div class="bubble">🎯 {item}</div>', unsafe_allow_html=True)
-        else:
-            st.write("No weekly pairs yet.")
-        st.markdown('</div>', unsafe_allow_html=True)
+    if tid in trades:
+        t = trades[tid]
 
-    with col_right:
-        st.markdown('<div class="glass"><h3>⚡ Daily Watchlist</h3>', unsafe_allow_html=True)
-        if st.session_state["daily_watch"]:
-            for item in st.session_state["daily_watch"]:
-                st.markdown(f'<div class="bubble">🔥 {item}</div>', unsafe_allow_html=True)
-        else:
-            st.write("No daily setups yet.")
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.subheader(f"Trade #{tid}")
+        st.write(f"Pair: {t.get('pair','N/A')} | Result: {t.get('result')} | RR: {t.get('rr')}")
+        st.write(f"Thought: {t.get('thought','')}")
 
-# ---------------------- WATCHLIST ----------------------
-elif page == "Watchlist":
-    clear_bg()
-    st.header("Watchlist 📊")
+        for tf, d in t["timeframes"].items():
+            st.markdown(f"### {tf}")
+            c1, c2 = st.columns(2)
 
-    pair = st.text_input("Pair (e.g. EUR/USD)")
-    category = st.selectbox("Category", ["Weekly", "Daily", "Wildcard"])
-    note = st.text_area("Reason")
+            with c1:
+                st.write("Before")
+                if d["before"]["image"]:
+                    st.image(d["before"]["image"])
+                st.write(d["before"]["note"])
 
-    if st.button("Add"):
-        item = f"{pair} — {note}"
-
-        if category == "Weekly":
-            st.session_state["weekly_watch"].append(item)
-        elif category == "Daily":
-            st.session_state["daily_watch"].append(item)
-        else:
-            st.session_state["wildcards"].append(item)
-
-        st.success(f"{pair} added")
-
-    st.divider()
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.subheader("Weekly")
-        for i in st.session_state["weekly_watch"]:
-            st.write("•", i)
-
-    with col2:
-        st.subheader("Daily")
-        for i in st.session_state["daily_watch"]:
-            st.write("•", i)
-
-    with col3:
-        st.subheader("Wildcards")
-        for i in st.session_state["wildcards"]:
-            st.write("•", i)
-
-    if st.button("Reset Weekly"):
-        st.session_state["weekly_watch"] = []
-        st.success("Weekly cleared")
-
-# ---------------------- LOG TRADE ----------------------
-elif page == "Log New Trade":
-    clear_bg()
-    st.header("Log New Trade")
-
-    with st.form("log_trade"):
-
-        date = st.date_input("Date")
-
-        st.subheader("Screenshots")
-
-        st.file_uploader("D")
-        st.text_area("D Note")
-
-        st.file_uploader("4H")
-        st.text_area("4H Note")
-
-        st.file_uploader("1H")
-        st.text_area("1H Note")
-
-        st.file_uploader("15m")
-        st.text_area("15m Note")
-
-        st.file_uploader("5m")
-        st.text_area("5m Note")
-
-        risk = st.text_input("Risk")
-        entry_time = st.time_input("Entry Time")
-        session = st.selectbox("Session", ["London", "New York", "Asia"])
-        rr = st.text_input("RR")
-        thought = st.text_area("Thought Process")
-
-        submit = st.form_submit_button("Submit")
-
-        if submit:
-            st.session_state["last_trade_id"] += 1
-            trade_id = st.session_state["last_trade_id"]
-
-            st.success(f"Trade Logged 🎯 ID: {trade_id}")
-
-# ---------------------- CLOSE TRADE ----------------------
-elif page == "Close Trade":
-    clear_bg()
-    st.header("Close Trade")
-
-    trade_id = st.number_input(
-        "Trade ID",
-        min_value=1,
-        value=int(st.session_state["last_trade_id"])
-    )
-
-    date = st.date_input("Date")
-    result = st.selectbox("Result", ["Win", "Loss", "Break Even"])
-    pct = st.number_input("Percentage", value=0.0)
-
-    st.subheader("Screenshots")
-
-    st.file_uploader("D")
-    st.text_area("D Note")
-
-    st.file_uploader("4H")
-    st.text_area("4H Note")
-
-    st.file_uploader("1H")
-    st.text_area("1H Note")
-
-    st.file_uploader("15m")
-    st.text_area("15m Note")
-
-    st.file_uploader("5m")
-    st.text_area("5m Note")
-
-    duration = st.text_input("Duration")
-    thought = st.text_area("Post Analysis")
-
-    if st.button("Close Trade"):
-        st.success(f"Trade {trade_id} Closed ✔")
-
-# ---------------------- VIEW TRADE ----------------------
-elif page == "View Trade":
-    clear_bg()
-    st.header("View Trade")
-
-    trade_id = st.number_input(
-        "Trade ID",
-        min_value=1,
-        value=int(st.session_state["last_trade_id"])
-    )
-
-    if st.button("Fetch"):
-        st.info(f"Showing trade #{trade_id}")
+            with c2:
+                st.write("After")
+                if d["after"]["image"]:
+                    st.image(d["after"]["image"])
+                st.write(d["after"]["note"])
